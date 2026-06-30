@@ -381,7 +381,13 @@
           <div class="field"><label>Реальное имя</label><input id="realName" value="${person?.realName||''}"></div>
           <div class="field"><label>Дата рождения</label><input id="birthAge" value="${person?.birthAge||''}"></div>
           <div class="field"><label>Местоположение</label><input id="locationText" value="${person?.location||''}"></div>
-          <div class="field"><label>Telegram</label><input id="telegram" value="${person?.telegram||''}"></div>
+          <div class="field">
+  <label>Telegram</label>
+  <div style="display:flex; gap:0.5rem;">
+    <input id="telegram" value="${person?.telegram||''}" style="flex:1;">
+    ${person?.telegram ? `<a href="https://t.me/${person.telegram.replace('@', '')}" target="_blank" style="background:#2d382a; border:1px solid #5a6e50; color:#dce5d5; padding:0.5rem 1rem; border-radius:2rem; text-decoration:none; display:inline-flex; align-items:center; gap:0.3rem; font-size:0.9rem;"><i class="fab fa-telegram"></i> Открыть</a>` : ''}
+  </div>
+</div>
           <div class="field"><label>WhatsApp</label><input id="whatsapp" value="${person?.whatsapp||''}"></div>
         </div>
       </div>
