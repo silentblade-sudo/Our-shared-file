@@ -160,11 +160,75 @@
       box-shadow: 0 4px 15px rgba(0,0,0,0.6);
       border: 1px solid #5a8a4a;
     }
-    @media print {
-      body * { visibility: hidden; }
-      #printArea, #printArea * { visibility: visible; }
-      #printArea { position: absolute; left: 0; top: 0; width: 100%; }
+    .status-filter-wrap { position: relative; }
+    .status-filter-panel {
+      display: none;
+      position: absolute;
+      top: 115%;
+      right: 0;
+      background: #131a15;
+      border: 1px solid #344231;
+      border-radius: 0.7rem;
+      padding: 0.8rem 1rem;
+      z-index: 50;
+      min-width: 220px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     }
+    .status-filter-panel label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    .status-filter-panel.open { display: block; }
+    .sort-select {
+      background: #1a1f1c;
+      color: white;
+      border: 1px solid #3a4a34;
+      padding: 0.5rem;
+      border-radius: 0.5rem;
+    }
+    .history-log {
+      background: #10150f;
+      border: 1px solid #2a3727;
+      border-radius: 0.6rem;
+      padding: 0.6rem 0.8rem;
+      max-height: 160px;
+      overflow-y: auto;
+      font-size: 0.82rem;
+    }
+    .history-log .entry {
+      padding: 0.3rem 0;
+      border-bottom: 1px dashed #2a3727;
+      color: #a9bba0;
+    }
+    .history-log .entry:last-child { border-bottom: none; }
+    .history-log .entry .who {
+      color: #cfdfc7;
+      font-weight: 600;
+    }
+    @media print {
+  /* Скрываем всё, кроме нужного нам элемента */
+  body * { 
+    visibility: hidden; 
+  }
+  
+  /* Делаем видимым только контейнер для печати */
+  #printArea, #printArea * { 
+    visibility: visible; 
+  }
+  
+  /* Позиционируем его в начале страницы */
+  #printArea { 
+    position: absolute; 
+    left: 0; 
+    top: 0; 
+    width: 100%;
+    display: block !important; /* Убедимся, что он не скрыт через display: none */
+  }
+}
   </style>
 </head>
 <body>
@@ -188,12 +252,31 @@
   const db = firebase.database();
   const storage = firebase.storage();
 
+  // ===================== КОНСТАНТЫ =====================
+  const STATUSES = ['Член Стаи','Информатор','Свидетель','Подозреваемый','Культист','Враг / Прокси'];
+  const STATUS_COLORS = {
+    'Член Стаи': '#2e7d32', 'Информатор': '#1565c0', 'Свидетель': '#f9a825',
+    'Подозреваемый': '#ef6c00', 'Культист': '#7b1fa2', 'Враг / Прокси': '#c62828'
+  };
+
   // ===================== ГЛОБАЛЬНОЕ СОСТОЯНИЕ =====================
   const state = {
     currentRoute: 'list',
     editId: null,
-    allPersons: []
+    allPersons: [],
+    selectedStatuses: [],
+    sortBy: 'lastEdited_desc',
+    editorName: ''
   };
+
+  // ===================== ИМЯ РЕДАКТОРА (для истории изменений) =====================
+  function getEditorName() {
+    if (!state.editorName) {
+      const name = window.prompt('Введите ваше имя/псевдоним для истории изменений досье:', '');
+      state.editorName = (name && name.trim()) ? name.trim() : 'Неизвестный';
+    }
+    return state.editorName;
+  }
 
   // ===================== ВСПЛЫВАЮЩИЕ УВЕДОМЛЕНИЯ =====================
   function showToast(message, duration = 2000) {
@@ -216,6 +299,7 @@
   // ===================== СОХРАНЕНИЕ ДАННЫХ В FIREBASE =====================
   async function savePersonToFirebase(id) {
     const now = new Date().toISOString().slice(0,16).replace('T',' ');
+    const editor = getEditorName();
     const data = {
       alias: document.getElementById('alias').value,
       realName: document.getElementById('realName').value,
@@ -237,8 +321,12 @@
 
     if (!id) {
       data.created = now;
+      data.editLog = [{ who: editor, when: now, action: 'Создано досье' }];
       await db.ref('persons').push(data);
     } else {
+      const existing = state.allPersons.find(p => p.id === id);
+      const prevLog = Array.isArray(existing?.editLog) ? existing.editLog : [];
+      data.editLog = [...prevLog, { who: editor, when: now, action: 'Изменено досье' }];
       await db.ref('persons/' + id).update(data);
     }
 
@@ -274,10 +362,25 @@
       </nav>
       <div class="flex-row" style="margin-bottom:1rem;">
         <input type="text" id="searchInput" placeholder="Поиск по имени..." style="flex:1; background:#1a1f1c; border:1px solid #3a4a34; padding:0.5rem; border-radius:0.5rem; color:white;" />
-        <select id="filterStatus" style="background:#1a1f1c; color:white; border:1px solid #3a4a34; padding:0.5rem; border-radius:0.5rem;">
-          <option value="">Все статусы</option>
-          <option>Член Стаи</option><option>Информатор</option><option>Свидетель</option>
-          <option>Подозреваемый</option><option>Культист</option><option>Враг / Прокси</option>
+        <div class="status-filter-wrap">
+          <button type="button" id="statusFilterBtn"><i class="fas fa-filter"></i> Статусы<span id="statusFilterCount"></span></button>
+          <div class="status-filter-panel" id="statusFilterPanel">
+            ${STATUSES.map(s => `
+              <label>
+                <input type="checkbox" class="statusFilterChk" value="${s}" ${state.selectedStatuses.includes(s) ? 'checked' : ''}>
+                <span class="status-badge" style="background:${STATUS_COLORS[s]};">${s}</span>
+              </label>
+            `).join('')}
+            <button type="button" id="statusFilterClear" style="width:100%; justify-content:center; margin-top:0.3rem;">Сбросить всё</button>
+          </div>
+        </div>
+        <select id="sortSelect" class="sort-select">
+          <option value="lastEdited_desc">Сначала недавно изменённые</option>
+          <option value="lastEdited_asc">Сначала давно изменённые</option>
+          <option value="alias_asc">Имя А→Я</option>
+          <option value="alias_desc">Имя Я→А</option>
+          <option value="trust_desc">Доверие: высокое→низкое</option>
+          <option value="trust_asc">Доверие: низкое→высокое</option>
         </select>
         <button onclick="state.currentRoute='create'; renderRoute();"><i class="fas fa-plus"></i> Добавить</button>
         <button onclick="exportToPrint()"><i class="fas fa-print"></i> Печать</button>
@@ -286,25 +389,69 @@
     `;
     loadAndDisplayPersons();
     document.getElementById('searchInput').addEventListener('input', filterPersons);
-    document.getElementById('filterStatus').addEventListener('change', filterPersons);
+
+    const sortSelect = document.getElementById('sortSelect');
+    sortSelect.value = state.sortBy;
+    sortSelect.addEventListener('change', (e) => { state.sortBy = e.target.value; filterPersons(); });
+
+    const filterBtn = document.getElementById('statusFilterBtn');
+    const filterPanel = document.getElementById('statusFilterPanel');
+    filterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      filterPanel.classList.toggle('open');
+    });
+    document.addEventListener('click', (e) => {
+      if (!filterPanel.contains(e.target) && e.target !== filterBtn) {
+        filterPanel.classList.remove('open');
+      }
+    }, { once: true });
+
+    document.querySelectorAll('.statusFilterChk').forEach(chk => {
+      chk.addEventListener('change', () => {
+        state.selectedStatuses = [...document.querySelectorAll('.statusFilterChk:checked')].map(c => c.value);
+        updateStatusFilterCount();
+        filterPersons();
+      });
+    });
+    document.getElementById('statusFilterClear').addEventListener('click', () => {
+      state.selectedStatuses = [];
+      document.querySelectorAll('.statusFilterChk').forEach(c => c.checked = false);
+      updateStatusFilterCount();
+      filterPersons();
+    });
+    updateStatusFilterCount();
+  }
+
+  function updateStatusFilterCount() {
+    const countEl = document.getElementById('statusFilterCount');
+    if (!countEl) return;
+    countEl.textContent = state.selectedStatuses.length ? ` (${state.selectedStatuses.length})` : '';
   }
 
   function filterPersons() {
     const search = (document.getElementById('searchInput')?.value || '').toLowerCase();
-    const status = document.getElementById('filterStatus')?.value || '';
     let filtered = state.allPersons;
     if (search) filtered = filtered.filter(p => (p.alias || '').toLowerCase().includes(search));
-    if (status) filtered = filtered.filter(p => p.status === status);
+    if (state.selectedStatuses.length) filtered = filtered.filter(p => state.selectedStatuses.includes(p.status));
+
+    filtered = [...filtered].sort((a, b) => {
+      switch (state.sortBy) {
+        case 'lastEdited_asc': return (a.lastEdited || '').localeCompare(b.lastEdited || '');
+        case 'alias_asc': return (a.alias || '').localeCompare(b.alias || '');
+        case 'alias_desc': return (b.alias || '').localeCompare(a.alias || '');
+        case 'trust_desc': return (b.trust || 0) - (a.trust || 0);
+        case 'trust_asc': return (a.trust || 0) - (b.trust || 0);
+        case 'lastEdited_desc':
+        default: return (b.lastEdited || '').localeCompare(a.lastEdited || '');
+      }
+    });
+
     renderTable(filtered);
   }
 
   function renderTable(persons) {
     const tbody = document.getElementById('personsTable');
     if (!tbody) return;
-    const statusColors = {
-      'Член Стаи': '#2e7d32', 'Информатор': '#1565c0', 'Свидетель': '#f9a825',
-      'Подозреваемый': '#ef6c00', 'Культист': '#7b1fa2', 'Враг / Прокси': '#c62828'
-    };
     tbody.innerHTML = `
       <table>
         <thead><tr><th>Имя / Псевдоним</th><th>Статус</th><th>Доверие</th><th>Изменён</th></tr></thead>
@@ -312,7 +459,7 @@
           ${persons.map(p => `
             <tr style="cursor:pointer;" onclick="openDossier('${p.id}')">
               <td><i class="fas fa-user-secret"></i> ${p.alias || 'Без имени'}</td>
-              <td><span class="status-badge" style="background:${statusColors[p.status] || '#555'};">${p.status || '-'}</span></td>
+              <td><span class="status-badge" style="background:${STATUS_COLORS[p.status] || '#555'};">${p.status || '-'}</span></td>
               <td>${'★'.repeat(p.trust || 0)}${'☆'.repeat(5-(p.trust||0))}</td>
               <td>${p.lastEdited || '-'}</td>
             </tr>
@@ -328,12 +475,8 @@
     renderRoute();
   }
 
-  // ===================== ЭКСПОРТ В ПЕЧАТЬ =====================
+  // ===================== ЭКСПОРТ В ПЕЧАТЬ (СПИСОК) =====================
   function exportToPrint() {
-    const statusColors = {
-      'Член Стаи': '#2e7d32', 'Информатор': '#1565c0', 'Свидетель': '#f9a825',
-      'Подозреваемый': '#ef6c00', 'Культист': '#7b1fa2', 'Враг / Прокси': '#c62828'
-    };
     const printContent = `
       <h2 style="color:black;">Список фигурантов (Архив «Черный Лес»)</h2>
       <table border="1" cellpadding="8" style="width:100%; border-collapse:collapse; color:black;">
@@ -342,15 +485,60 @@
           ${state.allPersons.map(p => `
             <tr>
               <td>${p.alias || '-'}</td>
-              <td style="background:${statusColors[p.status] || '#eee'};">${p.status || '-'}</td>
+              <td style="background:${STATUS_COLORS[p.status] || '#eee'};">${p.status || '-'}</td>
               <td>${'★'.repeat(p.trust||0)}</td>
               <td>${p.lastEdited || '-'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     `;
-    document.getElementById('printArea').innerHTML = printContent;
+    // Внутри функции printSingleDossier:
+document.getElementById('printArea').innerHTML = printContent;
+document.getElementById('printArea').style.display = 'block'; // Принудительно включаем
+setTimeout(() => {
     window.print();
+    document.getElementById('printArea').style.display = 'none'; // Скрываем обратно после печати
+}, 500);
+  }
+
+  // ===================== ПЕЧАТЬ ОДНОГО ДОСЬЕ =====================
+  function printSingleDossier(id) {
+    const p = state.allPersons.find(x => x.id === id);
+    if (!p) return;
+    const log = Array.isArray(p.editLog) ? p.editLog : [];
+    const printContent = `
+      <div style="color:black; font-family: Arial, sans-serif; max-width:800px;">
+        <h2 style="margin-bottom:0.2rem;">Досье: ${p.alias || 'Без имени'}</h2>
+        <p style="color:#555; margin-bottom:1rem;">Статус: <b>${p.status || '-'}</b> · Доверие: ${'★'.repeat(p.trust||0)}${'☆'.repeat(5-(p.trust||0))}</p>
+        ${p.photoURL ? `<img src="${p.photoURL}" style="width:140px;height:140px;object-fit:cover;border-radius:8px;margin-bottom:1rem;">` : ''}
+        <table border="1" cellpadding="6" style="width:100%; border-collapse:collapse; margin-bottom:1rem;">
+          <tr><th align="left" style="background:#eee;">Реальное имя</th><td>${p.realName || '-'}</td></tr>
+          <tr><th align="left" style="background:#eee;">Дата рождения</th><td>${p.birthAge || '-'}</td></tr>
+          <tr><th align="left" style="background:#eee;">Местоположение</th><td>${p.location || '-'}</td></tr>
+          <tr><th align="left" style="background:#eee;">Telegram</th><td>${p.telegram || '-'}</td></tr>
+          <tr><th align="left" style="background:#eee;">WhatsApp</th><td>${p.whatsapp || '-'}</td></tr>
+          <tr><th align="left" style="background:#eee;">Симптомы</th><td>${(p.symptoms||[]).join(', ') || '-'}${p.extraSymptoms ? ' · '+p.extraSymptoms : ''}</td></tr>
+          <tr><th align="left" style="background:#eee;">Связи</th><td>${p.connections || '-'}</td></tr>
+        </table>
+        <h3>История контакта</h3><p>${(p.history || '-').replace(/\n/g,'<br>')}</p>
+        <h3>Ключевые показания</h3><p>${(p.testimony || '-').replace(/\n/g,'<br>')}</p>
+        <h3>Заметки Архитектора</h3><p>${(p.architectNotes || '-').replace(/\n/g,'<br>')}</p>
+        <h3>История изменений досье</h3>
+        <table border="1" cellpadding="6" style="width:100%; border-collapse:collapse;">
+          <thead><tr><th>Дата</th><th>Кто</th><th>Действие</th></tr></thead>
+          <tbody>
+            ${log.length ? log.map(e => `<tr><td>${e.when}</td><td>${e.who}</td><td>${e.action}</td></tr>`).join('') : '<tr><td colspan="3">Нет записей</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+    // Внутри функции printSingleDossier:
+document.getElementById('printArea').innerHTML = printContent;
+document.getElementById('printArea').style.display = 'block'; // Принудительно включаем
+setTimeout(() => {
+    window.print();
+    document.getElementById('printArea').style.display = 'none'; // Скрываем обратно после печати
+}, 500);
   }
 
   // ===================== ФОРМА ДОСЬЕ =====================
@@ -361,7 +549,10 @@
       <nav>
         <button onclick="state.currentRoute='list'; renderRoute();"><i class="fas fa-arrow-left"></i> Назад к списку</button>
         <span class="logo">${isEdit ? 'Редактирование досье' : 'Новое досье'}</span>
-        ${isEdit ? `<button style="background:#5e3a3a;border-color:#aa4a4a;" onclick="deletePersonFromFirebase('${id}')"><i class="fas fa-trash"></i> Удалить</button>` : ''}
+        <div class="flex-row">
+          ${isEdit ? `<button onclick="printSingleDossier('${id}')"><i class="fas fa-print"></i> Печать досье</button>` : ''}
+          ${isEdit ? `<button style="background:#5e3a3a;border-color:#aa4a4a;" onclick="deletePersonFromFirebase('${id}')"><i class="fas fa-trash"></i> Удалить</button>` : ''}
+        </div>
       </nav>
       <div class="dossier-container" id="dossierForm"></div>
     `;
@@ -370,6 +561,7 @@
 
   function renderFullDossierForm(person, isEdit) {
     const formDiv = document.getElementById('dossierForm');
+    const log = Array.isArray(person?.editLog) ? person.editLog : [];
     formDiv.innerHTML = `
       <div style="display:flex; gap:1rem; flex-wrap:wrap;">
         <div id="photoContainer" style="width:150px;height:150px;background:#1c231e;border-radius:1rem;display:flex;align-items:center;justify-content:center;cursor:pointer; overflow:hidden;">
@@ -392,7 +584,7 @@
         </div>
       </div>
       <div style="margin:1rem 0; display:flex; gap:2rem; flex-wrap:wrap;">
-        <div class="field"><label>Статус</label><select id="status">${['Член Стаи','Информатор','Свидетель','Подозреваемый','Культист','Враг / Прокси'].map(s=>`<option ${person?.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="field"><label>Статус</label><select id="status">${STATUSES.map(s=>`<option ${person?.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
         <div class="field"><label>Доверие</label><input type="range" id="trust" min="1" max="5" value="${person?.trust||3}"> <span id="trustVal">${person?.trust||3}/5</span></div>
       </div>
       <div class="field"><label>История контакта</label><textarea id="history" rows="2">${person?.history||''}</textarea></div>
@@ -408,6 +600,12 @@
       <div class="field">
         <label>Последнее редактирование</label>
         <input id="lastEditedDisplay" readonly value="${person?.lastEdited || 'ещё не сохранено'}">
+      </div>
+      <div class="field" style="margin-top:1rem;">
+        <label>История изменений досье</label>
+        <div class="history-log">
+          ${log.length ? log.slice().reverse().map(e => `<div class="entry"><span class="who">${e.who}</span> — ${e.when} — ${e.action}</div>`).join('') : '<div class="entry">Пока нет записей</div>'}
+        </div>
       </div>
       <div style="display:flex; gap:1rem; margin-top:1.2rem;">
         <button id="saveBtn"><i class="fas fa-save"></i> Сохранить</button>
